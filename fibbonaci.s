@@ -7,7 +7,7 @@ working_quotient = $0200 ; 2 bytes
 mod10 = $0202 ; 2 bytes
 prev  = $0204 ; 2 bytes
 number = $0206 ; 2 bytes
-number_string = $0208 ; 6 bytes
+number_string = $0208 ; 6 byter
 
 E  = %10000000 ; enable
 RW = %01000000 ; read/write (write is active low)
@@ -98,7 +98,7 @@ divide_ignore:
   rol working_quotient ; shift last bit of quotient
   rol working_quotient + 1
 
-  jsr push_char
+  jsr add_char
 
   ; if working_quotient != 0, continue
   lda working_quotient
@@ -166,18 +166,21 @@ lcd_wait_loop:
   rts
 
 
-push_char:
-  ldx #5 ; start at end of number_string
-push_char_loop:
+add_char:
+  ldx #4 ; start at end of number_string
+add_char_loop:
   lda number_string,x
   sta number_string + 1, x
   dex
-  bpl push_char_loop ; shift all elements to the right
+  bpl add_char_loop ; shift all elements to the right
 
   clc
   lda mod10
   adc #"0"
   sta number_string ; add new char at beginning
+
+  lda #0
+  sta number_string + 5 ; make sure end of string is always null
   rts
 
   .org $fffc
