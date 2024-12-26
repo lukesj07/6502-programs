@@ -3,184 +3,198 @@ PORTA = $6001
 DDRB = $6002
 DDRA = $6003
 
+E  = %10000000
+RW = %01000000
+RS = %00100000
+
 working_quotient = $0200 ; 2 bytes
 mod10 = $0202 ; 2 bytes
-prev  = $0204 ; 2 bytes
-number = $0206 ; 2 bytes
-number_string = $0208 ; 6 byter
-
-E  = %10000000 ; enable
-RW = %01000000 ; read/write (write is active low)
-RS = %00100000 ; register select (high is writing data, low is instruction)
+prev_fibnum = $0204 ; 2 bytes
+fibnum = $0206 ; 2 bytes
+string = $0208 ; 6 bytes
 
   .org $8000
 
 reset:
-  ; reset stack pointer
   ldx #$ff
   txs
 
-  ; set port b to output
-  lda #%11111111
+  lda #%11111111 ; Set all pins on port B to output
   sta DDRB
-  ; set first 3 bits of a to output
-  lda #%11100000
+  lda #%11100000 ; Set top 3 pins on port A to output
   sta DDRA
 
-  lda #%00111000 ; 8 bit mode; 2 line display; 5x8 font
+  lda #%00111000 ; Set 8-bit mode; 2-line display; 5x8 font
   jsr execute_lcd_instruction
-  lda #%00001110 ; display and cursor on; blink off
+  lda #%00001110 ; Display on; cursor on; blink off
   jsr execute_lcd_instruction
-  lda #%00000110 ; increment and shift cursor; dont shift display
+  lda #%00000110 ; Increment and shift cursor; don't shift display
   jsr execute_lcd_instruction
 
-  ; init fib_loop
-  lda #0
-  sta prev
-  sta prev + 1
-  sta number
+  lda #0 ; Initialize prev_fibnum to 0 and fibnum to 1
+  sta prev_fibnum
+  sta prev_fibnum + 1
+  sta fibnum + 1
   lda #1
-  sta number + 1
-
+  sta fibnum
 
 fib_loop:
-  ; add prev + number
-  clc
-  lda prev
-  adc number
-  sta working_quotient ; use working_quotient to store prev+number
-  lda prev + 1
-  adc number + 1
-  sta working_quotient + 1
-  ; make prev = number
-  lda number
-  sta prev
-  lda number + 1
-  sta prev + 1
-  ; make number = sum (working_quotient)
-  lda working_quotient
-  sta number
-  lda working_quotient + 1
-  sta number + 1
+  ldx #$ff
+wait_loopx:
+  ldy #$ff
+wait_loopy:
+  nop
+  nop
+  nop
+  nop
+  nop
+  dey
+  bne wait_loopy
+  dex
+  bne wait_loopx
 
-  ; init working_quotient to be the number to convert to base 10
-  lda number
-  sta working_quotient
-  lda number + 1
-  sta working_quotient + 1
+  clc
+  lda prev_fibnum
+  adc fibnum 
+  pha
+  lda prev_fibnum + 1
+  adc fibnum + 1
+  pha ; Put the sum of prev_fibnum and fibnum on stack (most significant on top)
+  lda fibnum
+  sta prev_fibnum
+  lda fibnum + 1
+  sta prev_fibnum  + 1; Make prev_fibnum = fibnum
+  pla
+  sta fibnum + 1
+  pla
+  sta fibnum ; Make fibnum = sum
   
+  jsr clear_string
+
+  ; Initialize value to be the number to convert
+  lda fibnum
+  sta working_quotient
+  lda fibnum + 1
+  sta working_quotient + 1
+
 divide:
-  ; init remainder to be 0
+  ; Initialize the remainder to zero
   lda #0
   sta mod10
   sta mod10 + 1
   clc
-
   ldx #16
 divide_loop:
+  ; Rotate quotient and remainder
   rol working_quotient
   rol working_quotient + 1
   rol mod10
   rol mod10 + 1
-
-  ; a,y = dividend 0 divisor
+  ; a,y = dividend - devisor
   sec
   lda mod10
-  tay ; low byte into y
-  lda mod10 + 1
+  sbc #10
+  tay ; save low byte in Y
+  lda mod10+1
   sbc #0
-  bcc divide_ignore ; branch if dividend < divisor
+  bcc divide_ignore ; branch if dividend < devisor
   sty mod10
   sta mod10 + 1
 divide_ignore:
   dex
   bne divide_loop
-  rol working_quotient ; shift last bit of quotient
+  rol working_quotient ; shift in the last bit of the quotient
   rol working_quotient + 1
-
-  jsr add_char
-
-  ; if working_quotient != 0, continue
+  lda mod10
+  clc
+  adc #"0"
+  jsr push_char
+  ; if value != 0, then continue dividing
   lda working_quotient
   ora working_quotient + 1
-  bne divide
-  
-  lda #%00000001
-  jsr execute_lcd_instruction ; clear screen
+  bne divide ; branch if value not equal to 0
+
+  lda #%00000001 ; Clear display
+  jsr execute_lcd_instruction
+
   ldx #0
-print_loop:
-  ; set up loop and load character
-  lda number_string,x
-  beq fib_loop
-  ; wait and then write character
+print:
+  lda string,x
+  beq restart
   jsr lcd_wait
   sta PORTB
-  lda RS
+  lda #RS         ; Set RS; Clear RW/E bits
   sta PORTA
-  lda #(RS | E)
+  lda #(RS | E)   ; Set E bit to send instruction
   sta PORTA
-  lda RS
-  ; increment and loop
+  lda #RS         ; Clear E bits
+  sta PORTA
   inx
-  jmp print_loop
+  jmp print
+restart:
+  jmp fib_loop
 
+; SUBROUTINES
 
-execute_lcd_instruction:
-  jsr lcd_wait ; wait for lcd to finish previous instruction
-
-  sta PORTB ; set instruction
-
-  ; clear E/RW/RS bits
+; makes string[0..5] = 0
+clear_string:
+  ldx #0
   lda #0
-  sta PORTA
-  ; flash enable signal
-  lda E
-  sta PORTA
-  lda #0
-  sta PORTA
+clear_string_loop:
+  sta string,x
+  inx
+  cpx #6
+  beq clear_string_break
+  jmp clear_string_loop
+clear_string_break:
   rts
 
+; Add the character in the A register to the beginning of the 
+; null-terminated string `string`
+push_char:
+  pha ; Push new first char onto stack
+  ldy #0
+push_char_loop:
+  lda string,y ; Get char on the string and put into X
+  tax
+  pla
+  sta string,y ; Pull char off stack and add it to the string
+  iny
+  txa
+  pha           ; Push char from string onto stack
+  bne push_char_loop
+  pla
+  sta string,y ; Pull the null off the stack and add to the end of the string
+  rts
 
 lcd_wait:
   pha
-  lda #0 ; set port b to input
+  lda #%00000000  ; Port B is input
   sta DDRB
-lcd_wait_loop:
-  ; read busy signal and load into a register
-  lda RW
+lcdbusy:
+  lda #RW
   sta PORTA
   lda #(RW | E)
   sta PORTA
   lda PORTB
-
-  ; if busy bit is high, loop
   and #%10000000
-  bne lcd_wait_loop
-
-  ; reset and return
-  lda RW
+  bne lcdbusy
+  lda #RW
   sta PORTA
-  lda #%11111111
+  lda #%11111111  ; Port B is output
   sta DDRB
   pla
   rts
 
-
-add_char:
-  ldx #4 ; start at end of number_string
-add_char_loop:
-  lda number_string,x
-  sta number_string + 1, x
-  dex
-  bpl add_char_loop ; shift all elements to the right
-
-  clc
-  lda mod10
-  adc #"0"
-  sta number_string ; add new char at beginning
-
-  lda #0
-  sta number_string + 5 ; make sure end of string is always null
+execute_lcd_instruction:
+  jsr lcd_wait
+  sta PORTB
+  lda #0         ; Clear RS/RW/E bits
+  sta PORTA
+  lda #E         ; Set E bit to send instruction
+  sta PORTA
+  lda #0         ; Clear RS/RW/E bits
+  sta PORTA
   rts
 
   .org $fffc
