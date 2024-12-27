@@ -69,7 +69,8 @@ wait_loopy:
   pla
   sta fibnum ; Make fibnum = sum
   
-  jsr clear_string
+  lda #0
+  sta string
 
   ; Initialize value to be the number to convert
   lda fibnum
