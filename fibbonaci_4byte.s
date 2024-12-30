@@ -31,7 +31,9 @@ reset:
   jsr execute_lcd_instruction
   lda #%00001110 ; Display on; cursor on; blink off
   jsr execute_lcd_instruction
-  lda #%00000110 ; Increment and shift cursor; don't shift display
+  lda #%00000110 ; Increment and shift cursor; don't shift display (dont know if this is right or needed)
+  jsr execute_lcd_instruction
+  lda #%00000001 ; Clear display
   jsr execute_lcd_instruction
 
   lda #0 ; Initialize prev_fibnum to 0 and fibnum to 1
@@ -169,7 +171,7 @@ divide_ignore:
   ora working_quotient + 3
   bne divide ; branch if value not equal to 0
 
-  lda #%00000001 ; Clear display
+  lda #%00000010 ; Home (faster than clearing)
   jsr execute_lcd_instruction
 
   ldx #0
