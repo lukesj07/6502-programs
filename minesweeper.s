@@ -1,7 +1,7 @@
-PORTA = $6000
-PORTB = $6001
-DDRA  = $6002
-DDRB  = $6003
+PORTB = $6000
+PORTA = $6001
+DDRB  = $6002
+DDRA  = $6003
 PCR   = $600c ; Peripheral control
 IFR   = $600d ; Interrupt flag
 IER   = $600e ; Interrupt enable
@@ -24,16 +24,16 @@ cursor_x = $0210 ; 1 byte
 cursor_y = $0211 ; 1 byte
 
 bitmask = $0212 ; 1 byte
+loc_mine_count = $0213
 
-game_state = $0213 ; 1 byte
-mine_count = $0214 ; 1 byte
-cells_revealed = $0215 ; 1 byte
-buff_ptr = $0216 ; 1 byte
-temp = $0217 ; 1 byte
-display_buffer = $0218 ; 64 bytes
+game_state = $0214 ; 1 byte
+mine_count = $0215 ; 1 byte
+cells_revealed = $0216 ; 1 byte
+buff_ptr = $0217 ; 1 byte
+temp = $0218 ; 1 byte
+display_buffer = $0219 ; 64 bytes
 
 GAME_ACTIVE = %10000000
-GAME_WIN    = %01000000 ; only check when game is not active. 1 is won, 0 is lost
 
   .org $8000
 
@@ -54,11 +54,11 @@ reset:
   ldx #$ff
   txs
 
-  lda #%10010010 ; Enable CA1 and CB1 interrupts
-  sta IER
   lda #%00000000 ; Set interupts to happen on falling edge
   sta PCR
-  sei
+  lda #%10010010 ; Enable CA1 and CB1 interrupts
+  sta IER
+  cli
 
   lda #%11111111 ; Set all pins of PORTB to output
   sta DDRB
@@ -80,14 +80,14 @@ reset:
   sta cursor_x
   sta cursor_y
   sta cells_revealed
-  lda #%11000000
+  lda #%10000000
   sta game_state
 
   ldx #0
 mine_setup:
   lda #0
-  sta mine_array
-  sta revealed_array
+  sta mine_array, x
+  sta revealed_array, x
   inx
   cpx #8
   bne mine_setup
@@ -103,7 +103,7 @@ mine_setup:
   ldx #0
 buffer_setup:
   lda #" "
-  sta display_buffer
+  sta display_buffer, x
   inx
   cpx #64
   bne buffer_setup
@@ -111,33 +111,40 @@ buffer_setup:
 game_loop:
   lda game_state
   and #%10000000
-  beq game_over
+  beq lost
 
-  ; TODO add game win check
+  lda #64
+  clc
+  sbc mine_count
+  sta temp
+  lda cells_revealed
+  clc
+  sbc temp
+  beq won
 
-  jsr update_display_buffer
+  ;jsr update_display_buffer
   jsr update_display
 
   jmp game_loop
 
-game_over:
-  lda #%00000001 ; Clear display
-  jsr execute_lcd_instruction
-  
-  ldx #0
-  lda game_state
-  and #%01000000
-  beq lost
 won:
+  ldx #0
+  lda #%00000001 ; clear display
+  jsr execute_lcd_instruction
+won_loop:
   lda win_message, x
   beq done
   inx
-  jmp won
+  jmp won_loop
 lost:
+  ldx #0
+  lda #%00000001 ; clear display
+  jsr execute_lcd_instruction
+lost_loop:
   lda lose_message, x
   beq done
   inx
-  jmp lost
+  jmp lost_loop
 
 done:
   jmp done
@@ -175,8 +182,9 @@ show_loop:
   iny
   cpy #8
   beq newline
+  jmp show_loop
 newline:
-  lda #%11000000
+  lda #%11000000 ; Start at beginning of 2nd line
   jsr execute_lcd_instruction
 show_loop2:
   lda display_buffer, x
@@ -184,9 +192,12 @@ show_loop2:
   inx
   iny
   cpy #16
-  beq game_loop
+  bne show_loop2
+  rts
+
 
 update_display_buffer:
+  sei
   ldy #0
   sty buff_ptr
 row_update_loop:
@@ -198,28 +209,28 @@ row_update_loop:
   ldx #0
 col_update_loop:
   clc
-  adc x ; update buff_ptr
+  stx temp
+  adc temp ; update buff_ptr
   sta buff_ptr
 
 ; check cursor position
-  sei ; where should interupts be disabled?
+
   lda cursor_x
-  cpx
+  sta temp
+  cpx temp
   bne no_cursor
   
   lda cursor_y
-  cpy
-  cli
+  sta temp
+  cpy temp
   bne no_cursor
 
   txa
   pha ; push x to stack
 
-  sei
   ldx buff_ptr
   lda #"X"
   sta display_buffer, x
-  cli
   
   pla
   tax ; take x off stack
@@ -231,7 +242,8 @@ no_cursor:
   
   clc
   lda #7
-  sbc x
+  stx temp
+  sbc temp
   tax
   lda #1
   sta bitmask
@@ -246,53 +258,72 @@ no_cursor:
   jmp next_space
 print_revealed:
   lda #0
-  sta mine_count
+  sta loc_mine_count
 
   tya
-  pha # push y to stack
+  pha ; push y to stack
   txa
-  pha # push x to stack
+  pha ; push x to stack
 
   ldx #0
 neighbor_check:
-  ; TODO: check to see on edge
-  
   stx temp
-
   pla
+  tax ; put index x in temp and mine x in x
+  lda temp
+  pha ; put index x on stack
+  txa
+  pha ; push mine x twice because it gets pulled without being repushed
   pha
-  pha # make up for stack being pulled but not repushed
+
+  ldx temp
 
   lda neighbor_offsetsy, x
   clc
-  adc y
+  sty temp
+  adc temp
   tay ; put y coord of neighbor in y register
   pla
   clc
   adc neighbor_offsetsx, x
   tax ; put x coord of neighbor in x register
 
+  cpx #0
+  bmi next_neighbor
+  cpx #7
+  bpl next_neighbor
+  cpy #0
+  bmi next_neighbor
+  cpy #7
+  bpl next_neighbor
+
   clc
   lda #7
-  sbc x
+  stx temp
+  sbc temp
   tax
   lda #1
   sta bitmask
   asl bitmask, x ; make neighbor bitmask
 
-  ldx temp
+  pla
+  sta temp
+  pla
+  tax
+  lda temp
+  pha
 
   lda mine_array, y
   and bitmask
   beq next_neighbor
-  inc mine_count
+  inc loc_mine_count
 next_neighbor:
   inx
   cpx #8
   bne neighbor_check
 
   ldx buff_ptr
-  lda mine_count
+  lda loc_mine_count
   clc
   adc #"0"
   sta display_buffer, x
@@ -305,11 +336,17 @@ next_neighbor:
 next_space:
   inx
   cpx #8
-  bne col_update_loop
+  bne col_update_jump
   iny
   cpy #8
-  bne row_update_loop
+  bne row_update_jump
+  cli
   rts
+col_update_jump:
+  jmp col_update_loop
+row_update_jump:
+  jmp row_update_loop
+
 
 lcd_wait:
   pha
@@ -323,6 +360,7 @@ lcdbusy:
   lda PORTB
   and #%10000000
   bne lcdbusy
+
   lda #RW
   sta PORTA
   lda #%11111111  ; Port B is output
@@ -351,7 +389,6 @@ print_char:
   lda #RS         ; Clear E bits
   sta PORTA
   rts
-
 
 
 
