@@ -37,6 +37,9 @@ GAME_WIN    = %01000000 ; only check when game is not active. 1 is won, 0 is los
 
   .org $8000
 
+win_message: .asciiz "You Won!"
+lose_message: .asciiz "You Lost."
+
 neighbor_offsetsx:
   .byte -1, 0, 1
   .byte -1,    1
@@ -106,23 +109,82 @@ buffer_setup:
   bne buffer_setup
 
 game_loop:
-  sei
   lda game_state
   and #%10000000
   beq game_over
-  cli
+
+  ; TODO add game win check
 
   jsr update_display_buffer
-
+  jsr update_display
 
   jmp game_loop
 
 game_over:
-  ; check if won/lost, display correct message, then jump to done
+  lda #%00000001 ; Clear display
+  jsr execute_lcd_instruction
+  
+  ldx #0
+  lda game_state
+  and #%01000000
+  beq lost
+won:
+  lda win_message, x
+  beq done
+  inx
+  jmp won
+lost:
+  lda lose_message, x
+  beq done
+  inx
+  jmp lost
 
 done:
   jmp done
 
+
+update_display:
+  lda cursor_y
+  cmp #2
+  bmi section_1
+  cmp #4
+  bmi section_2
+  cmp #6
+  bmi section_3
+  ; section 4
+  ldx #48
+  jmp show
+section_1:
+  ldx #0
+  jmp show
+section_2:
+  ldx #16
+  jmp show
+section_3:
+  ldx #32
+  jmp show
+show:
+  lda #%00000001 ; Clear display
+  jsr execute_lcd_instruction
+
+  ldy #0
+show_loop:
+  lda display_buffer, x
+  jsr print_char
+  inx
+  iny
+  cpy #8
+  beq newline
+newline:
+  lda #%11000000
+  jsr execute_lcd_instruction
+show_loop2:
+  lda display_buffer, x
+  jsr print_char
+  inx
+  iny
+  cpy #16
+  beq game_loop
 
 update_display_buffer:
   ldy #0
@@ -140,20 +202,24 @@ col_update_loop:
   sta buff_ptr
 
 ; check cursor position
+  sei ; where should interupts be disabled?
   lda cursor_x
   cpx
   bne no_cursor
   
   lda cursor_y
   cpy
+  cli
   bne no_cursor
 
   txa
   pha ; push x to stack
 
+  sei
   ldx buff_ptr
   lda #"X"
   sta display_buffer, x
+  cli
   
   pla
   tax ; take x off stack
