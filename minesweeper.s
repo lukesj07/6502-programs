@@ -34,6 +34,10 @@ temp = $0218 ; 1 byte
 display_buffer = $0219 ; 64 bytes
 number_array = $0259 ; 64 bytes for storing pre-calculated numbers
 
+neighbor_x = $021A ; 1 byte Temporary storage for neighbor x coordinate
+neighbor_y = $021B ; 1 byte Temporary storage for neighbor y coordinate
+neighbor_ptr = $021C ; 1 bytePointer for neighbor loop
+  
 GAME_ACTIVE = %10000000
 
   .org $8000
@@ -42,6 +46,8 @@ win_message: .asciiz "You Won!"
 lose_message: .asciiz "You Lost."
 
 reset:
+  sei
+
   ldx #$ff
   txs
 
@@ -49,7 +55,6 @@ reset:
   sta PCR
   lda #%10010010 ; Enable CA1 and CB1 interrupts
   sta IER
-  sei
 
   lda #%11111111 ; Set all pins of PORTB to output
   sta DDRB
@@ -114,20 +119,16 @@ buffer_setup:
   cli
 
 game_loop:
-  sei
   lda game_state
   and #GAME_ACTIVE
   beq lost
-  cli
 
   lda #64
   sec
   sbc mine_count
-  sei
   sta temp
   lda cells_revealed
   cmp temp
-  cli
   beq won
 
   jsr update_display_buffer
@@ -181,7 +182,7 @@ section_3:
   ldx #32
   jmp show
 show:
-  lda #%00000001 ; Clear display
+  lda #%00000010 ; Clear display
   jsr execute_lcd_instruction
 
   ldy #0
@@ -295,12 +296,70 @@ done_update:
   cli                   ; Make sure interrupts are enabled before returning
   rts
 
+neighbor_x_offset: .byte $ff, $00, $01, $ff, $01, $ff, $00, $01 ; -1, 0, 1, -1, 1, -1, 0, 1
+neighbor_y_offset: .byte $ff, $ff, $ff, $00, $00, $01, $01, $01 ; -1,-1,-1, 0, 0, 1, 1, 1
+
 count_neighbors:
-  lda #0          ; Simplified version - just return 0 for now
-  sta loc_mine_count
+  lda #0
+  sta loc_mine_count   ; Initialize mine count to 0
+  sta neighbor_ptr     ; Initialize neighbor pointer
+
+neighbor_loop:
+  ldx neighbor_ptr
+  cpx #8              ; Check if we've processed all 8 neighbors
+  beq done_counting
+
+; Calculate neighbor X coordinate
+  lda cursor_x
+  clc                    
+  adc neighbor_x_offset, x  
+  bpl check_x_upper     ; If result is positive, check upper bound
+  ; If negative result, skip this neighbor
+  jmp skip_neighbor
+check_x_upper:
+  cmp #8
+  bpl skip_neighbor
+
+  sta neighbor_x        ; Store valid X coordinate
+  
+  ; Calculate neighbor Y coordinate - same logic
+  lda cursor_y
+  clc
+  adc neighbor_y_offset, x
+  bpl check_y_upper
+  jmp skip_neighbor
+check_y_upper:
+  cmp #8
+  bpl skip_neighbor
+  
+  sta neighbor_y        ; Store valid Y coordinate
+  ; Create bitmask for neighbor position
+  lda neighbor_x
+  eor #7              ; Flip bits to get 7-x
+  tax
+  lda #1
+  sta bitmask
+
+shift_neighbor_mask:
+  cpx #0
+  beq check_mine
+  asl bitmask
+  dex
+  jmp shift_neighbor_mask
+
+check_mine:
+  ldx neighbor_y
+  lda mine_array, x    ; Get mine status for this row
+  and bitmask         ; Check if mine exists at this position
+  beq skip_neighbor
+  inc loc_mine_count   ; Increment count if mine found
+
+skip_neighbor:
+  inc neighbor_ptr
+  jmp neighbor_loop
+
+done_counting:
   rts
-;neighbor_x_offset: .byte $ff, $00, $01, $ff, $01, $ff, $00, $01 ; -1, 0, 1, -1, 1, -1, 0, 1
-;neighbor_y_offset: .byte $ff, $ff, $ff, $00, $00, $01, $01, $01 ; -1,-1,-1, 0, 0, 1, 1, 1
 
 lcd_wait:
   pha
@@ -356,7 +415,6 @@ irq:
   bne move
   jmp exit_irq
 
-; Now modify the select handler to use the counted value
 select:
   lda #SELECT_INT 
   sta IFR           
@@ -375,17 +433,23 @@ shift_bitmask3:
   asl bitmask
   dex
   jmp shift_bitmask3
+
 check_mine_hit:
+  ; Save this bitmask for later
+  lda bitmask
+  pha               ; Save the cursor's bitmask
+
   ; Don't modify any already-revealed cells
   ldx cursor_y
   lda revealed_array, x
   and bitmask
   beq not_revealed
+  pla               ; Clean up stack
   jmp exit_irq
 not_revealed:
   ; Check for mine
   lda mine_array, x
-  and bitmask
+  and bitmask      ; Using cursor's bitmask to check for mine
   bne mine_hit
 
   ; Calculate buffer position using same method as display
@@ -405,18 +469,20 @@ not_revealed:
   lda loc_mine_count   ; Use the counted value instead of hardcoded 1
   sta number_array, x   
 
-  ; add to revealed_array
+  ; add to revealed_array using the saved cursor bitmask
+  pla                  ; Restore the cursor's bitmask
   ldx cursor_y
-  lda revealed_array, x
-  ora bitmask
+  ora revealed_array, x ; OR with existing revealed bits
   sta revealed_array, x
   inc cells_revealed
   jmp exit_irq
 
 mine_hit:
+  pla                  ; Clean up stack
   lda #%00000000
   sta game_state
   jmp exit_irq
+
 
 move:
   lda #MOVE_INT      ; Clear the CA1 interrupt flag
