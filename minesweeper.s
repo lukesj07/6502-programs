@@ -25,28 +25,25 @@ SELECT_INT = %00010000  ; Selection interrupt flag
 ; Memory Layout (Page 2 and 3)
 mine_array      = $0200  ; 8 bytes - Mine positions ($0200-$0207)
 revealed_array  = $0208  ; 8 bytes - Revealed cells ($0208-$020F)
-cursor_x        = $0210  ; Current cursor X position
-cursor_y        = $0211  ; Current cursor Y position
-bitmask         = $0212  ; Working bitmask
-loc_mine_count  = $0213  ; Local mine counter
-game_state      = $0214  ; Current game state
-mine_count      = $0215  ; Total number of mines
-cells_revealed  = $0216  ; Number of revealed cells
-buff_ptr        = $0217  ; Display buffer pointer
-temp            = $0218  ; Temporary storage
-neighbor_x      = $0219  ; Neighbor X coordinate
-neighbor_y      = $021A  ; Neighbor Y coordinate
-neighbor_ptr    = $021B  ; Neighbor loop counter
+cursor_x        = $0210  ; 1 byte - Current cursor X position
+cursor_y        = $0211  ; 1 byte - Current cursor Y position
+bitmask         = $0212  ; 1 byte - Working bitmask
+loc_mine_count  = $0213  ; 1 byte - Local mine counter
+mine_count      = $0214  ; 1 byte - Total number of mines
+cells_revealed  = $0215  ; 1 byte - Number of revealed cells
+buff_ptr        = $0216  ; 1 byte - Display buffer pointer
+temp            = $0217  ; 1 byte - Temporary storage
+neighbor_x      = $0218  ; 1 byte - Neighbor X coordinate
+neighbor_y      = $0219  ; 1 byte - Neighbor Y coordinate
+neighbor_ptr    = $021A  ; 1 byte - Neighbor loop counter
+blink_counter   = $021B  ; 1 byte - Counter for cursor blink
 display_buffer  = $0300  ; 64 bytes for display ($0300-$033F)
 number_array    = $0340  ; 64 bytes for mine numbers ($0340-$037F)
-
-; Game State Flags
-GAME_ACTIVE = %10000000
 
 ; Program Start
   .org $8000
 
-; Game Messages
+; Game Data
 win_message: .asciiz "You Won!"
 lose_message: .asciiz "You Lost."
 
@@ -85,8 +82,7 @@ reset:
   sta cursor_x
   sta cursor_y
   sta cells_revealed
-  lda #%10000000         ; Set game as active
-  sta game_state
+  sta blink_counter
 
   ; Clear arrays
   ldx #0
@@ -127,18 +123,14 @@ continue_number_init:
 ; Main Game Loop
 ; ====================================
 game_loop:
-  lda game_state
-  and #GAME_ACTIVE
-  beq lost               ; Check if game is over (lost)
-
   ; Check win condition
   lda #64
   sec
   sbc mine_count
-  sta temp
-  lda cells_revealed
-  cmp temp
+  cmp cells_revealed
   beq won
+
+  inc blink_counter
 
   jsr update_display_buffer
   jsr update_display
@@ -176,26 +168,14 @@ done:
 ; ====================================
 ; Display Update Routines
 ; ====================================
+
 update_display:
   lda cursor_y           ; Determine which section to display
-  cmp #2
-  bmi section_1
-  cmp #4
-  bmi section_2
-  cmp #6
-  bmi section_3
-  ldx #48                ; section 4
-  jmp show
-section_1:
-  ldx #0
-  jmp show
-section_2:
-  ldx #16
-  jmp show
-section_3:
-  ldx #32
-  jmp show
-
+  lsr                    ; Divide by 2 to get section index (0-3)
+  tax
+  lda section_offsets,x  ; Load the corresponding offset
+  tax                    ; Put offset in X for show routine
+  jmp show              ; Continue with show routine
 show:
   lda #%00000010         ; Return cursor home
   jsr execute_lcd_instruction
@@ -209,6 +189,8 @@ show_loop:               ; Display first line
   cpy #8
   beq print_page
   jmp show_loop
+
+section_offsets: .byte 0, 16, 32, 48
 
 print_page:              ; Add section number
   lda #" "
@@ -245,7 +227,7 @@ show_loop2:             ; Display second line
 ; Display Buffer Update
 ; ====================================
 update_display_buffer:
-  sei                   ; Protect shared data
+  sei ;                   ; Protect shared data
   lda #0
   sta buff_ptr
 
@@ -267,6 +249,11 @@ col_loop:
   cpx cursor_x
   bne not_cursor
   cpy cursor_y
+  bne not_cursor
+
+  ; Blink logic
+  lda blink_counter
+  and #%01000000 ; toggles every 64 game cycles
   bne not_cursor
   
   ldx buff_ptr
@@ -310,17 +297,13 @@ next_col:
   ldx temp             ; Restore x coordinate
   inx
   cpx #8
-  beq next_row
-  jmp col_loop
+  bne col_loop
 
-next_row:
   iny
   cpy #8
-  beq done_update
-  jmp row_loop
+  bne row_loop
 
-done_update:
-  cli
+  cli ;
   rts
 
 ; ====================================
@@ -339,26 +322,22 @@ neighbor_loop:
   cpx #8
   beq done_counting
 
-  ; Calculate and validate neighbor X
+; Calculate and validate neighbor X
   lda cursor_x
   clc                    
   adc neighbor_x_offset, x
-  bpl check_x_upper
-  jmp skip_neighbor
-check_x_upper:
+  bmi skip_neighbor      ; Branch if negative
   cmp #8
-  bpl skip_neighbor
+  bcs skip_neighbor      ; Branch if >= 8
   sta neighbor_x
 
-  ; Calculate and validate neighbor Y
+; Calculate and validate neighbor Y
   lda cursor_y
   clc
   adc neighbor_y_offset, x
-  bpl check_y_upper
-  jmp skip_neighbor
-check_y_upper:
+  bmi skip_neighbor      ; Branch if negative
   cmp #8
-  bpl skip_neighbor
+  bcs skip_neighbor      ; Branch if >= 8
   sta neighbor_y
 
   ; Create bitmask for neighbor
@@ -483,8 +462,11 @@ not_revealed:
   ; Check for mine
   lda mine_array, x
   and bitmask
-  bne mine_hit
+  beq not_mine
+  pla
+  jmp lost
 
+not_mine:
   ; Calculate buffer position
   lda cursor_y
   asl
@@ -507,12 +489,6 @@ not_revealed:
   ora revealed_array, x
   sta revealed_array, x
   inc cells_revealed
-  jmp exit_irq
-
-mine_hit:
-  pla                    ; Clean up stack
-  lda #%00000000        ; Game over
-  sta game_state
   jmp exit_irq
 
 move:
