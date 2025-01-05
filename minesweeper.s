@@ -22,32 +22,35 @@ DOWN  = %00000111
 MOVE_INT   = %00000010  ; movement interrupt flag
 SELECT_INT = %00010000  ; selection interrupt flag
 
-; memory layout (page 2 and 3)
+; memory layout
+; zero page variables (most used)
+display_buffer  = $00  ; 64 bytes for display ($0300-$033F)
+number_array    = $40  ; 64 bytes for mine numbers ($0340-$037F)
+cursor_x        = $80  ; 1 byte - current cursor x
+cursor_y        = $81  ; 1 byte - current cursor y
+bitmask         = $82  ; 1 byte - working bitmask
+buff_ptr        = $83  ; 1 byte - display buffer pointer
+temp            = $84  ; 1 byte - temporary storage
+
+; page 2 
 mine_array      = $0200  ; 8 bytes - mine positions ($0200-$0207)
 revealed_array  = $0208  ; 8 bytes - revealed cells ($0208-$020F)
-cursor_x        = $0210  ; 1 byte - current cursor x
-cursor_y        = $0211  ; 1 byte - current cursor y
-bitmask         = $0212  ; 1 byte - working bitmask
-loc_mine_count  = $0213  ; 1 byte - local mine counter
-mine_count      = $0214  ; 1 byte - total number of mines
-cells_revealed  = $0215  ; 1 byte - number of revealed cells
-buff_ptr        = $0216  ; 1 byte - display buffer pointer
-temp            = $0217  ; 1 byte - temporary storage
-neighbor_x      = $0218  ; 1 byte - neighbor X coordinate
-neighbor_y      = $0219  ; 1 byte - neighbor Y coordinate
-neighbor_ptr    = $021A  ; 1 byte - neighbor loop counter
-blink_counter   = $021B  ; 1 byte - counter for cursor blink
-startup_timer   = $021C  ; 1 byte - timer used as a random seed for mine generation
-game_started    = $021D  ; 1 byte - flag for game state
-display_buffer  = $0300  ; 64 bytes for display ($0300-$033F)
-number_array    = $0340  ; 64 bytes for mine numbers ($0340-$037F)
+loc_mine_count  = $0210  ; 1 byte - local mine counter
+mine_count      = $0211  ; 1 byte - total number of mines
+cells_revealed  = $0212  ; 1 byte - number of revealed cells
+neighbor_x      = $0213  ; 1 byte - neighbor X coordinate
+neighbor_y      = $0214  ; 1 byte - neighbor Y coordinate
+neighbor_ptr    = $0215  ; 1 byte - neighbor loop counter
+blink_counter   = $0216  ; 1 byte - counter for cursor blink
+startup_timer   = $0217  ; 1 byte - timer used as a random seed for mine generation
+game_started    = $0218  ; 1 byte - flag for game state
 
   .org $8000
 
 win_message: .asciiz "You Won!"
 lose_message: .asciiz "You Lost."
-title_msg:     .asciiz "MINESWEEPER"
-press_msg:     .asciiz "Press SELECT"
+title_msg: .asciiz "MINESWEEPER"
+press_msg: .asciiz "Press SELECT"
 
 ; ====================================
 ; Initialization
@@ -134,14 +137,14 @@ startup_loop:
 
   sei                   ; disable interrupts during debounce delay and during generation
 
-  ldx #$32              ; delay should be around 50 ms
-outer_delay:
+  ldx #$FF
+outer_dbdelay:
   ldy #$FF
-inner_delay:
+inner_dbdelay:
   dey
-  bne inner_delay
+  bne inner_dbdelay
   dex
-  bne outer_delay
+  bne outer_dbdelay
   
   ; start game setup
   jsr clear_board
@@ -197,18 +200,7 @@ place_loop:
   and #%00000111
   tay                    ; use y register for y position
   
-  ; create bitmask for this position
-  txa                    ; get x position back
-  eor #7
-  tax
-  lda #1
-  sta bitmask
-shift_mine:
-  cpx #0
-  beq check_position
-  asl bitmask
-  dex
-  jmp shift_mine
+  jsr create_bitmask
 
 check_position:
   tya                    ; get y position back for array index
@@ -373,7 +365,7 @@ col_loop:
 
   ; blink logic
   lda blink_counter
-  and #%01000000 ; toggles every 64 game cycles
+  and #%00100000 ; toggles every 32 game cycles
   bne not_cursor
   
   ldx buff_ptr
@@ -382,21 +374,8 @@ col_loop:
   jmp next_col
 
 not_cursor:
-  ; calculate bit position (7 - x)
-  txa
-  eor #7
-  tax
-  lda #1
-  sta bitmask
-
-shift_bitmask1:
-  cpx #0
-  beq check_revealed
-  asl bitmask
-  dex
-  jmp shift_bitmask1
-
-check_revealed:
+  jsr create_bitmask
+  ; check if revealed
   ldx buff_ptr
   lda revealed_array, y
   and bitmask
@@ -460,19 +439,8 @@ neighbor_loop:
   bcs skip_neighbor      ; branch if >= 8
   sta neighbor_y
 
-  ; create bitmask for neighbor
-  lda neighbor_x
-  eor #7
-  tax
-  lda #1
-  sta bitmask
-
-shift_neighbor_mask:
-  cpx #0
-  beq check_mine
-  asl bitmask
-  dex
-  jmp shift_neighbor_mask
+  ldx neighbor_x
+  jsr create_bitmask
 
 check_mine:
   ldx neighbor_y
@@ -486,6 +454,28 @@ skip_neighbor:
   jmp neighbor_loop
 
 done_counting:
+  rts
+
+; ====================================
+; Bitmask Creation
+; ====================================
+; input: X register contains position (0-7)
+; output: bitmask variable contains shifted result
+; preserves all main registers
+create_bitmask:
+  pha           ; save A
+  txa           ; get position
+  eor #7        ; flip 0-7 to 7-0
+  tax
+  lda #1        ; start with bit 0
+  sta bitmask
+  beq shift_end ; if x was 7 (became 0), we're done
+shift_loop:
+  asl bitmask   ; shift left
+  dex
+  bne shift_loop
+shift_end:
+  pla           ; restore A
   rts
 
 ; ====================================
@@ -562,18 +552,9 @@ select:
   
 normal_select:
   ; create bitmask for cursor position
-  lda cursor_x
-  eor #7
-  tax
-  lda #1
-  sta bitmask
+  ldx cursor_x
+  jsr create_bitmask
 
-shift_bitmask3:
-  cpx #0
-  beq check_mine_hit
-  asl bitmask
-  dex
-  jmp shift_bitmask3
 check_mine_hit:
   lda bitmask
   pha                    ; save bitmask
