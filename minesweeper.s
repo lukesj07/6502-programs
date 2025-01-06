@@ -365,7 +365,7 @@ col_loop:
 
   ; blink logic
   lda blink_counter
-  and #%00100000 ; toggles every 32 game cycles
+  and #%01000000 ; toggles every 64 game cycles
   bne not_cursor
   
   ldx buff_ptr
@@ -461,21 +461,19 @@ done_counting:
 ; ====================================
 ; input: X register contains position (0-7)
 ; output: bitmask variable contains shifted result
-; preserves all main registers
 create_bitmask:
-  pha           ; save A
   txa           ; get position
   eor #7        ; flip 0-7 to 7-0
   tax
   lda #1        ; start with bit 0
-  sta bitmask
-  beq shift_end ; if x was 7 (became 0), we're done
+  cpx #0
+  beq shift_end
 shift_loop:
-  asl bitmask   ; shift left
+  asl           ; shift left
   dex
   bne shift_loop
 shift_end:
-  pla           ; restore A
+  sta bitmask
   rts
 
 ; ====================================
