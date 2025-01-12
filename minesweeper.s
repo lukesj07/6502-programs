@@ -135,7 +135,7 @@ startup_loop:
   lda game_started
   beq startup_loop       ; If not started, continue loop
 
-  sei                   ; disable interrupts during debounce delay and during generation
+  sei                    ; disable interrupts during debounce delay and during generation
 
   ldx #$FF
 outer_dbdelay:
